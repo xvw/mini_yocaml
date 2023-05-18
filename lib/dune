@@ -1,0 +1,4 @@
+(library
+  (name mini_yocaml)
+  (public_name mini_yocaml)
+  (libraries preface))

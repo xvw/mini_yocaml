@@ -1,0 +1,4 @@
+(executable
+  (name playground)
+  (promote (until-clean))
+  (libraries preface mini_yocaml))
