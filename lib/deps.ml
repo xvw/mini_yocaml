@@ -11,16 +11,23 @@ module Monoid = Preface.Make.Monoid.Via_combine_and_neutral (struct
 end)
 
 let get_mtimes deps =
-  deps |> D.elements |> List.map Action.get_mtime |> T.sequence
+  deps
+  |> D.elements (* Apply the effect [Get_modification_time]*)
+  |> List.map Action.get_mtime
+  (* At this stage, we have a [int IO.t list] but we want a [int list IO.t] *)
+  (* So we use [T.sequence] to go from [int IO.t list] to [int list IO.t] *)
+  |> T.sequence
 ;;
 
 let need_update deps target =
   let open IO.Syntax in
   let* exists = Action.file_exists target in
-  if exists
+  if exists (* If the file exists we should try to reach the deps mtimes *)
   then
     let* mtime_target = Action.get_mtime target in
     let+ mtimes_deps = get_mtimes deps in
-    List.exists (fun mtime_deps -> mtime_deps > mtime_target) mtimes_deps
-  else IO.return true
+    (* We check if there, at least, one deps that has a greater mtime. *)
+    List.exists (fun mtime_deps -> mtime_deps >= mtime_target) mtimes_deps
+  else (* The file target does not exists. We need an update *)
+    IO.return true
 ;;
