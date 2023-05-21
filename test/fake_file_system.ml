@@ -13,19 +13,17 @@ type elt =
 type t = elt list
 
 let rec pp_elt ppf = function
-  | File { name; mtime; content } ->
-    Format.fprintf ppf "File {%s; %d; %s}" name mtime content
-  | Dir { name; mtime; children } ->
+  | File { name; _ } -> Format.fprintf ppf "└─⟢ %s" name
+  | Dir { name; children; _ } ->
     Format.fprintf
       ppf
-      "Dir {@[<hov 1>%s; %d; @[<hov 1>%a]@]@]}"
+      "└─⟤ %s/@[<v -8>@;%a@]"
       name
-      mtime
       (Format.pp_print_list pp_elt)
       children
 ;;
 
-let pp = Format.pp_print_list pp_elt
+let pp ppf x = Format.fprintf ppf "@,%a@." (Format.pp_print_list pp_elt) x
 
 let mtime = function
   | File { mtime; _ } | Dir { mtime; _ } -> mtime
@@ -35,7 +33,13 @@ let name = function
   | File { name; _ } | Dir { name; _ } -> name
 ;;
 
-let compare_fs a b = String.compare (name a) (name b)
+let compare_fs a b =
+  match a, b with
+  | File { name = a; _ }, File { name = b; _ }
+  | Dir { name = a; _ }, Dir { name = b; _ } -> String.compare a b
+  | Dir _, File _ -> -1
+  | File _, Dir _ -> 1
+;;
 
 let rec equal_elt a b =
   match a, b with
@@ -56,7 +60,7 @@ let rec equal_elt a b =
 ;;
 
 let equal = List.equal equal_elt
-let fs_testable = Alcotest.testable pp equal
+let testable = Alcotest.testable pp equal
 let elt_testable = Alcotest.testable pp_elt equal_elt
 let file ?(mtime = 0) name content = File { name; mtime; content }
 
@@ -64,8 +68,10 @@ let dir name children =
   let mtime =
     List.fold_left (fun acc child -> max acc (mtime child)) 0 children
   in
-  Dir { name; mtime; children }
+  Dir { name; mtime; children = children |> List.sort compare_fs }
 ;;
+
+let from_list x = x
 
 let get_elt fs path_str =
   let path = String.split_on_char '/' path_str in
@@ -131,24 +137,97 @@ let update_elt fs path_str f =
     aux [] fs path
 ;;
 
-let log _ = ()
-let fail message = Error message
-let file_exists fs path = Option.is_some (get_elt fs path)
+module Runtime = struct
+  let log _ = ()
+  let file_exists fs path = Option.is_some (get_elt fs path)
 
-let get_modification_time fs path =
-  match get_elt fs path with
-  | None -> Error ("file or directory" ^ path ^ " does not exists")
-  | Some x -> Ok (mtime x)
-;;
+  let get_modification_time fs path =
+    match get_elt fs path with
+    | None -> Error ("file or directory" ^ path ^ " does not exists")
+    | Some x -> Ok (mtime x)
+  ;;
 
-let read_file fs path =
-  match get_elt fs path with
-  | Some (File { content; _ }) -> Ok content
-  | _ -> Error ("file" ^ path ^ " does not exists")
-;;
+  let read_file fs path =
+    match get_elt fs path with
+    | Some (File { content; _ }) -> Ok content
+    | _ -> Error ("file" ^ path ^ " does not exists")
+  ;;
 
-let write_file ?at fs path content =
-  update_elt fs path (fun target _ -> file ?mtime:at target content)
+  let write_file ?at fs path content =
+    update_elt fs path (fun target _ -> file ?mtime:at target content)
+  ;;
+
+  let filter_with kind predicate elt =
+    match kind, elt with
+    | `Both, (File { name; _ } | Dir { name; _ }) when predicate name ->
+      Some name
+    | `Files, File { name; _ } when predicate name -> Some name
+    | `Directories, Dir { name; _ } when predicate name -> Some name
+    | (`Both | `Files | `Directories), _ -> None
+  ;;
+
+  let read_dir fs path kind predicate =
+    match get_elt fs path with
+    | Some (Dir { children; _ }) ->
+      List.filter_map (filter_with kind predicate) children
+    | _ -> []
+  ;;
+end
+
+(* Effect Handler *)
+
+let run ~fs ~time program =
+  let handler =
+    Effect.Deep.
+      { effc =
+          (fun (type a) (eff : a Effect.t) ->
+            let open Mini_yocaml.Action in
+            match eff with
+            | Yocaml_log message ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  let () = Runtime.log message in
+                  continue k ())
+            | Yocaml_fail message -> Some (fun _ -> failwith message)
+            | Yocaml_file_exists path ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  let result = Runtime.file_exists !fs path in
+                  continue k result)
+            | Yocaml_get_modification_time path ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  match Runtime.get_modification_time !fs path with
+                  | Ok mtime -> continue k mtime
+                  | Error message -> failwith message)
+            | Yocaml_read_file path ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  match Runtime.read_file !fs path with
+                  | Ok x -> continue k x
+                  | Error message -> failwith message)
+            | Yocaml_write_file (path, content) ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  let () =
+                    fs := Runtime.write_file ~at:!time !fs path content
+                  in
+                  continue k ())
+            | Yocaml_read_dir (path, kind, pred) ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let () = incr time in
+                  let children = Runtime.read_dir !fs path kind pred in
+                  continue k children)
+            | _ -> None)
+      }
+  in
+  Mini_yocaml.IO.run handler program
 ;;
 
 (* Test *)
@@ -156,7 +235,7 @@ let write_file ?at fs path content =
 (* Since this module is present only for
    testing purpose, we can inline tests *)
 
-let pipe_write_file ?at path content fs = write_file fs ?at path content
+let pipe_write_file ?at path content fs = Runtime.write_file fs ?at path content
 
 let test_get_elt =
   let open Alcotest in
@@ -213,8 +292,7 @@ let test_get_elt =
 ;;
 
 let test_update_elt_1 =
-  let open Alcotest in
-  test_case "Some test using update_elt" `Quick (fun () ->
+  Alcotest.test_case "Some test using update_elt" `Quick (fun () ->
     let fs =
       [ dir
           "."
@@ -240,13 +318,12 @@ let test_update_elt_1 =
           ]
       ]
     in
-    let computed = write_file fs "./hello.txt" "Replaced" in
-    check fs_testable "should equal" expected computed)
+    let computed = Runtime.write_file fs "./hello.txt" "Replaced" in
+    Alcotest.check testable "should equal" expected computed)
 ;;
 
 let test_update_elt_2 =
-  let open Alcotest in
-  test_case "Some test using update_elt" `Quick (fun () ->
+  Alcotest.test_case "Some test using update_elt" `Quick (fun () ->
     let fs =
       [ dir
           "."
@@ -278,12 +355,11 @@ let test_update_elt_2 =
       |> pipe_write_file "./post/second.md" "Replaced"
       |> pipe_write_file "./post/third.md" "Created"
     in
-    check fs_testable "should equal" expected computed)
+    Alcotest.check testable "should equal" expected computed)
 ;;
 
 let test_update_elt_3 =
-  let open Alcotest in
-  test_case "Some test using update_elt" `Quick (fun () ->
+  Alcotest.test_case "Some test using update_elt" `Quick (fun () ->
     let fs =
       [ dir
           "."
@@ -322,7 +398,7 @@ let test_update_elt_3 =
       |> pipe_write_file "root/bla.ml" "print_endline"
       |> pipe_write_file "./post/images/avatar/xvw.png" "xvw"
     in
-    check fs_testable "should equal" expected computed)
+    Alcotest.check testable "should equal" expected computed)
 ;;
 
 let test_cases =
