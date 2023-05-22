@@ -110,3 +110,5 @@ let test_cases =
     ; test_need_update_7
     ] )
 ;;
+
+let testable = Alcotest.testable Deps.pp Deps.equal
