@@ -11,6 +11,12 @@ type t
     describe if a target should be written or not.*)
 val need_update : t -> string -> bool IO.t
 
+(** [from_list l] produces a set of dependencies from a list of file path*)
+val from_list : string list -> t
+
+val pp : Format.formatter -> t -> unit
+val equal : t -> t -> bool
+
 (** A set is a monoid. *)
 
 module Monoid : Preface.Specs.MONOID with type t = t

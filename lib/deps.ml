@@ -3,6 +3,8 @@ module T = Preface.List.Monad.Traversable (IO)
 
 type t = D.t
 
+let from_list list = D.of_list list
+
 module Monoid = Preface.Make.Monoid.Via_combine_and_neutral (struct
   type t = D.t
 
@@ -30,4 +32,16 @@ let need_update deps target =
     List.exists (fun mtime_deps -> mtime_deps >= mtime_target) mtimes_deps
   else (* The file target does not exists. We need an update *)
     IO.return true
+;;
+
+let equal = D.equal
+
+let pp ppf deps =
+  Format.fprintf
+    ppf
+    "Deps [@[<v 0>%a@]]"
+    (Format.pp_print_list
+       ~pp_sep:(fun ppf () -> Format.fprintf ppf ";@ ")
+       Format.pp_print_string)
+    (D.elements deps)
 ;;

@@ -13,11 +13,12 @@ type elt =
 type t = elt list
 
 let rec pp_elt ppf = function
-  | File { name; _ } -> Format.fprintf ppf "└─⟢ %s" name
+  | File { name; content; mtime } ->
+    Format.fprintf ppf "└─⟢ %s %d \"%s\"" name mtime content
   | Dir { name; children; _ } ->
     Format.fprintf
       ppf
-      "└─⟤ %s/@[<v -8>@;%a@]"
+      "└─⟤ %s/@[<v -10>@;%a@]"
       name
       (Format.pp_print_list pp_elt)
       children
@@ -71,7 +72,7 @@ let dir name children =
   Dir { name; mtime; children = children |> List.sort compare_fs }
 ;;
 
-let from_list x = x
+let from_list x = x |> List.sort compare_fs
 
 let get_elt fs path_str =
   let path = String.split_on_char '/' path_str in
@@ -134,7 +135,7 @@ let update_elt fs path_str f =
         (* It is necessary to continue to go through the tree *)
         aux (x :: acc) fs_xs path
     in
-    aux [] fs path
+    aux [] fs path |> List.sort compare_fs
 ;;
 
 module Runtime = struct
@@ -176,7 +177,7 @@ end
 
 (* Effect Handler *)
 
-let run ~fs ~time program =
+let run ~fs ~time program input =
   let handler =
     Effect.Deep.
       { effc =
@@ -186,27 +187,23 @@ let run ~fs ~time program =
             | Yocaml_log message ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let () = incr time in
                   let () = Runtime.log message in
                   continue k ())
             | Yocaml_fail message -> Some (fun _ -> failwith message)
             | Yocaml_file_exists path ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let () = incr time in
                   let result = Runtime.file_exists !fs path in
                   continue k result)
             | Yocaml_get_modification_time path ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let () = incr time in
                   match Runtime.get_modification_time !fs path with
                   | Ok mtime -> continue k mtime
                   | Error message -> failwith message)
             | Yocaml_read_file path ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let () = incr time in
                   match Runtime.read_file !fs path with
                   | Ok x -> continue k x
                   | Error message -> failwith message)
@@ -221,13 +218,12 @@ let run ~fs ~time program =
             | Yocaml_read_dir (path, kind, pred) ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let () = incr time in
                   let children = Runtime.read_dir !fs path kind pred in
                   continue k children)
             | _ -> None)
       }
   in
-  Mini_yocaml.IO.run handler program
+  Mini_yocaml.IO.run handler program input
 ;;
 
 (* Test *)
