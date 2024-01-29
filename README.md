@@ -7,7 +7,7 @@ In a sense, a kind of DSL capable of describing tasks that interact with a file
 system. Although its general operation is described in the [following
 article](https://xhtmlboi.github.io/articles/yocaml.html), pair-programming a
 subset of the overall system is a very good exercise, allowing you to experiment
-with the use of OCaml 5's `user-defined-effects', rather than using YOCaml's
+with the use of OCaml 5's `user-defined-effects`, rather than using YOCaml's
 venerable Freer Monad.
 
 **The aim is not to end up with a YOCaml competitor.**
